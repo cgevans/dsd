@@ -3826,3 +3826,89 @@ def rna_duplex_domain_pairs_constraint(
                                  evaluate=evaluate,
                                  summary=summary,
                                  pairs=pairs_tuple)
+
+
+def rna_duplex_domain_pairs_constraint_opposite(
+        threshold: float,
+        temperature: float = dv.default_temperature,
+        negate: bool = False,
+        weight: float = 1.0,
+        weight_transfer_function: Callable[[float], float] = lambda x: x,
+        short_description: str = 'rna_dup_dom_pairs',
+        pairs: Optional[Iterable[Tuple[Domain, Domain]]] = None,
+        parameters_filename: str = dv.default_vienna_rna_parameter_filename) \
+        -> DomainPairsConstraint:
+    """
+    Returns constraint that checks given pairs of :any:`Domain`'s for excessive interaction using
+    Vienna RNA's RNAduplex executable.
+
+    :param threshold: energy threshold
+    :param temperature: temperature in Celsius
+    :param negate: whether to negate free energy (making it larger for more favorable structures).
+                   If True, then the constraint is violated if energy > `threshold`.
+                   If False, then the constraint is violated if energy < `threshold`.
+    :param weight: how much to weigh this :any:`Constraint`
+    :param weight_transfer_function:
+        See :py:data:`Constraint.weight_transfer_function`.
+    :param short_description: short description of constraint suitable for logging to stdout
+    :param pairs: pairs of :any:`Domain`'s to compare; if not specified, checks all pairs
+    :param parameters_filename: name of parameters file for ViennaRNA; default is
+                                same as :py:meth:`vienna_nupack.rna_duplex_multiple`
+    :return: constraint
+    """
+
+    def evaluate(domain_pairs: Iterable[Tuple[Domain, Domain]]) -> List[Tuple[OrderedSet[Domain], float]]:
+        if any(d1.sequence is None or d2.sequence is None for d1, d2 in domain_pairs):
+            raise ValueError('cannot evaluate domains unless they have sequences assigned')
+        sequence_pairs, _, _ = _all_pairs_domain_sequences_and_complements(domain_pairs)
+        domain_sets_weights: List[Tuple[OrderedSet[Domain], float]] = []
+        energies = dv.rna_duplex_multiple(sequence_pairs, logger, temperature, negate, parameters_filename)
+        for (domain1, domain2), energy in zip(domain_pairs, energies):
+            excess = energy - threshold
+            if negate:
+                excess = -excess
+            if excess > 0.0:
+                domain_set_weights = (OrderedSet([domain1, domain2]), excess)
+                domain_sets_weights.append(domain_set_weights)
+        return domain_sets_weights
+
+    def summary(domain_pairs: Iterable[Tuple[Domain, Domain]],
+                report_only_violations: bool) -> ConstraintReport:
+        sequence_pairs, domain_name_pairs, domains = _all_pairs_domain_sequences_and_complements(domain_pairs)
+        energies = dv.rna_duplex_multiple(sequence_pairs, logger, temperature, negate, parameters_filename)
+        max_name_length = max(len(name) for name in _flatten(domain_name_pairs))
+
+        num_checks = len(energies)
+        num_violations = 0
+        lines: List[str] = []
+        for (domain1, domain2), (name1, name2), energy in zip(domains, domain_name_pairs, energies):
+            passed = energy_excess_domains(-energy, -threshold, negate, domain1, domain2) <= 0.0
+            if not passed:
+                num_violations += 1
+            if not report_only_violations or (report_only_violations and not passed):
+                line = (f'domains '
+                        f'{name1:{max_name_length}}, '
+                        f'{name2:{max_name_length}}: '
+                        f'{energy:6.2f} kcal/mol'
+                        f'{"" if passed else "  **violation**"}')
+                lines.append(line)
+
+        if not report_only_violations:
+            lines.sort(key=lambda line_: ' **violation**' not in line_)  # put violations first
+
+        content = '\n'.join(lines)
+        report = ConstraintReport(constraint=None, content=content,
+                                  num_violations=num_violations, num_checks=num_checks)
+        return report
+
+    pairs_tuple = None
+    if pairs is not None:
+        pairs_tuple = tuple(pairs)
+
+    return DomainPairsConstraint(description='RNAduplex some domain pairs (opp)',
+                                 short_description=short_description,
+                                 weight=weight,
+                                 weight_transfer_function=weight_transfer_function,
+                                 evaluate=evaluate,
+                                 summary=summary,
+                                 pairs=pairs_tuple)
