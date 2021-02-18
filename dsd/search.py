@@ -1621,6 +1621,19 @@ def _log_constraint_summary(*, design: Design,
         for constraint in all_constraints)
     logger.info(weight_str + all_constraints_str)
 
+    # Log individual weights in the next line
+    violation_weights: Dict[str, float] = dict()
+    for violation in violation_set_new.all_violations:
+        violation_weights[violation.constraint.short_description] = violation_weights.get(
+            violation.constraint.short_description, 0.0) + violation.weight
+
+    violation_weights_str = "|".join(
+        f"{violation_weights.get(constraint.short_description, 0):{len(constraint.short_description)}.2f}" 
+        for constraint in all_constraints
+    )
+
+    logger.info(' '*(9+1+8+1+10+1+10+1+9+1+9) + '||' + violation_weights_str)
+
 
 def assign_sequences_to_domains_randomly_from_pools(design: Design, domain_to_strand: Dict[Domain, Strand],
                                                     rng: np.random.Generator = dn.default_rng,
